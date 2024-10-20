@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>PiVPN Nexus Dashboard</h1>
+
+<div id="status">
+    <h2>Status</h2>
+    <p>VPN Chain: {{ status.vpn_chain|join(' -> ') }}</p>
+    <p>DNS Leak Status: {{ 'No Leaks' if status.dns_leak_status else 'Leak Detected' }}</p>
+    <p>PFS Enabled: {{ status.pfs_enabled }}</p>
+</div>
+
+<button class="btn btn-primary mt-3"
+        hx-get="/optimize_vpn_chain"
+        hx-target="#status">
+    Optimize VPN
+</button>
+<h2 class="mt-4">Traffic Statistics</h2>
+<div id="traffic-stats"
+     hx-get="/traffic_stats"
+     hx-trigger="load every 60s">
+    <!-- Traffic stats will be loaded here -->
+</div>
+<button class="btn btn-secondary mt-3"
+        hx-post="/enable_pfs"
+        hx-swap="outerHTML">
+    Enable Perfect Forward Secrecy
+</button>
+{% endblock %}

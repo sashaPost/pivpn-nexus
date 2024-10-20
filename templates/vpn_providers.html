@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>VPN Providers</h1>
+
+<div id="vpn-providers-list">
+    {% for provider in providers %}
+        {% include "vpn_provider_item.html" %}
+    {% endfor %}
+</div>
+
+<h2 class="mt-4">Add VPN Provider</h2>
+<form hx-post="/vpn_providers" hx-target="#vpn-providers-list" hx-swap="beforeend">
+    <div class="mb-3">
+        <label for="name" class="form-label">Provider Name</label>
+        <input type="text" class="form-control" id="name" name="name" required>
+    </div>
+    <div class="mb-3">
+        <label for="config_path" class="form-label">Config Path</label>
+        <input type="text" class="form-control" id="config_path" name="config_path" required>
+    </div>
+    <button type="submit" class="btn btn-success">Add Provider</button>
+</form>
+{% endblock %}
