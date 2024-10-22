@@ -1,2 +1,9 @@
 .venv/
 .idea/
+*.pyc
+
+logs/
+config/test/
+
+
+project_tree.txt

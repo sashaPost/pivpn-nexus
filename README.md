@@ -47,6 +47,11 @@ PiVPN Nexus is a robust VPN management system designed to run on a Raspberry Pi.
 1. Start the PiVPN Nexus service:
    ```
    sudo -E /home/{user}/{path_to_project}/pivpn-nexus/.venv/bin/python run.py
+   
+   OR
+   
+   sudo -E /home/{user}/{path_to_project}/pivpn-nexus/.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
    ```
 
 2. Access the web interface by navigating to `http://your_raspberry_pi_ip:8000` in your web browser.

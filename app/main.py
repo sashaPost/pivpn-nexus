@@ -4,10 +4,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 # from typing import List
 from .vpn_manager import AdvancedVPNNexusManager
+from .logging_utility import logger
 
 
 app = FastAPI(title="PiVPN Nexus")
-vpn_manager = AdvancedVPNNexusManager('/etc/vpn_nexus_manager.conf')
+# vpn_manager = AdvancedVPNNexusManager('/etc/vpn_nexus_manager.conf')
+vpn_manager = AdvancedVPNNexusManager('config/vpn_nexus_manager.conf')
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -16,7 +18,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class VPNProvider(BaseModel):
     name: str
     config_path: str
-
 
 @app.get("/")
 async def home(request: Request):
@@ -27,6 +28,7 @@ async def home(request: Request):
 @app.get("/vpn_providers")
 async def list_vpn_providers(request: Request):
     providers = vpn_manager.list_providers()
+    logger.info(f"VPN providers: {providers}")
     return templates.TemplateResponse("vpn_providers.html", {"request": request, "providers": providers})
 
 
@@ -68,3 +70,8 @@ async def get_dns_leak_status():
 async def enable_pfs():
     vpn_manager.enable_pfs()
     return {"message": "Perfect Forward Secrecy enabled"}
+
+
+@app.get("/current_ip")
+async def get_current_ip():
+    return {"ip": vpn_manager.get_current_ip()}

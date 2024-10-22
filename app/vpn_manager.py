@@ -1,25 +1,28 @@
 import configparser
 import datetime
-import logging
+import os.path
 import random
 import subprocess
 import time
+from tabnanny import check
+
 import dns.resolver
 import threading
-
 import requests
 import psutil
 import schedule
+from .logging_utility import logger
+from pathlib import Path
 
 
 class AdvancedVPNNexusManager:
     def __init__(self, config_file: str):
         self.config = self._load_config(config_file)
-        self.logger = self._setup_logger()
         self.vpn_chain = []
         self.traffic_log = {}
         self.dns_leak_status = True
         self.pfs_enabled = False
+        self.base_path = Path(__file__).parent.parent
 
     @staticmethod
     def _load_config(config_file: str) -> configparser.ConfigParser:
@@ -27,22 +30,11 @@ class AdvancedVPNNexusManager:
         config.read(config_file)
         return config
 
-    @staticmethod
-    def _setup_logger() -> logging.Logger:
-        logger = logging.getLogger('VPNNexusManager')
-        logger.setLevel(logging.INFO)
-        handler = logging.FileHandler('/var/log/vpn_nexus_manager.log')
-        # formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s:%(lineno)d - %(pathname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        return logger
-
     def setup_enhanced_encryption(self):
         for vpn in self.config.sections():
             config_path = self.config[vpn]['config_path']
             self._update_openvpn_config(config_path)
-        self.logger.info("Enhanced encryption setup completed")
+        logger.info("Enhanced encryption setup completed")
 
     def _update_openvpn_config(self, config_path: str):
         with open(config_path, 'a') as config_file:
@@ -51,25 +43,93 @@ class AdvancedVPNNexusManager:
             config_file.write("\ntls-version-min 1.2")
             config_file.write("\ntls-cipher TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384")
             config_file.write("\nncp-ciphers AES-256-GCM:AES-256-CBC")
-        self.logger.info(f"Updated OpenVPN config: {config_path}")
+        logger.info(f"Updated OpenVPN config: {config_path}")
 
+    # def setup_vpn_chain(self, num_hops=2):
+    #     available_vpns = self.config.sections()
+    #     if len(available_vpns) < num_hops:
+    #         # self.logger.error(f"Not enough VPN configs for {num_hops} hops")
+    #         logger.error(f"Not enough VPN configs for {num_hops} hops")
+    #         return False
+    #
+    #     self.vpn_chain = random.sample(available_vpns, num_hops)
+    #     for i, vpn in enumerate(self.vpn_chain):
+    #         config_path = self.config[vpn]['config_path']
+    #         if i==0:
+    #             subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
+    #         else:
+    #             time.sleep(10)
+    #             subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
+    #
+    #     # self.logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
+    #     logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
+    #     return True
     def setup_vpn_chain(self, num_hops=2):
         available_vpns = self.config.sections()
         if len(available_vpns) < num_hops:
-            self.logger.error(f"Not enough VPN configs for {num_hops} hops")
+            logger.error(f"Not enough VPN configs for {num_hops} hops")
             return False
 
         self.vpn_chain = random.sample(available_vpns, num_hops)
         for i, vpn in enumerate(self.vpn_chain):
             config_path = self.config[vpn]['config_path']
-            if i==0:
-                subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
-            else:
-                time.sleep(10)
-                subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
+            if not os.path.isabs(config_path):
+                config_path = os.path.join(self.base_path, config_path)
 
-        self.logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
+            try:
+                subprocess.run(["which", "openvpn"], check=True, capture_output=True)
+
+                if not os.path.isfile(config_path):
+                    logger.error(f"Config file not found: {config_path}")
+                    return False
+
+                creds_file = os.path.join(os.path.dirname(config_path), "vpn-credentials.txt")
+                logger.info(f"Using credentials file: {creds_file}")
+                if os.path.isfile(creds_file):
+                    auth_cmd = ["--auth-user-pass", creds_file]
+                else:
+                    auth_cmd = []
+
+                cmd = [
+                    "sudo", "openvpn",
+                    "--config", config_path,
+                    "--daemon",
+                    f"--log", os.path.join(self.base_path, "logs", f"openvpn-{vpn}.log"),
+                        "--status", os.path.join(self.base_path, "logs", f"openvpn-status-{vpn}.log"), "1"
+                ] + auth_cmd
+
+                logger.info(f"Starting OpenVPN with command: {cmd}")
+                process = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+
+                if i < num_hops - 1:
+                    time.sleep(10)
+
+                logger.info(f"Successfully started VPN: {vpn}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to start OpenVPN for {vpn}: {e.stderr}")
+                # Clean up any running VPN instances
+                self.cleanup_vpn_chain()
+                return False
+            except Exception as e:
+                logger.error(f"Unexpected error setting up VPN chain: {str(e)}")                # Clean up any running VPN instances
+                self.cleanup_vpn_chain()
+                return False
+
+        logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
         return True
+
+    def cleanup_vpn_chain(self):
+        """Clean up any running OpenVPN instances"""
+        try:
+            subprocess.run(["sudo", "killall", "openvpn"], check=False)
+            logger.info(f"Cleaned up OpenVPN processes")
+        except Exception as e:
+            logger.error(f"Failed to clean up OpenVPN processes: {str(e)}")
 
     def optimize_vpn_chain(self):
         best_chain = None
@@ -83,7 +143,8 @@ class AdvancedVPNNexusManager:
                 best_latency = latency
 
         self.vpn_chain = best_chain
-        self.logger.info(f"Optimized VPN chain: {' -> '.join(self.vpn_chain)}")
+        # self.logger.info(f"Optimized VPN chain: {' -> '.join(self.vpn_chain)}")
+        logger.info(f"Optimized VPN chain: {' -> '.join(self.vpn_chain)}")
 
     def measure_latency(self):
         try:
@@ -92,7 +153,8 @@ class AdvancedVPNNexusManager:
             end = time.time()
             return end - start
         except Exception as e:
-            self.logger.error(f"Failed to measure latency: {e}")
+            # self.logger.error(f"Failed to measure latency: {e}")
+            logger.error(f"Failed to measure latency: {e}")
             return float('inf')
 
     def setup_dns_over_https(self):
@@ -108,10 +170,12 @@ class AdvancedVPNNexusManager:
             subprocess.run(["sudo", "systemctl", "start", "dnscrypt-proxy"], check=True)
             with open("/etc/resolv.conf", "w") as f:
                 f.write("nameserver 127.0.0.1\n")
-            self.logger.info("DNS over HTTPS setup completed")
+            # self.logger.info("DNS over HTTPS setup completed")
+            logger.info("DNS over HTTPS setup completed")
             return True
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"Failed to setup DNS over HTTPS: {str(e)}")
+            # self.logger.error(f"Failed to setup DNS over HTTPS: {str(e)}")
+            logger.error(f"Failed to setup DNS over HTTPS: {str(e)}")
             return False
 
     def check_dns_leak(self):
@@ -123,12 +187,15 @@ class AdvancedVPNNexusManager:
 
             if ip == self.get_current_ip():
                 self.dns_leak_status = False
-                self.logger.warning("DNS leak detected")
+                # self.logger.warning("DNS leak detected")
+                logger.warning("DNS leak detected")
             else:
                 self.dns_leak_status = True
-                self.logger.info("No DNS leak detected")
+                # self.logger.info("No DNS leak detected")
+                logger.info("No DNS leak detected")
         except Exception as e:
-            self.logger.error(f"Error checking DNS leaks: {str(e)}")
+            # self.logger.error(f"Error checking DNS leaks: {str(e)}")
+            logger.error(f"Error checking DNS leaks: {str(e)}")
 
     def enable_pfs(self):
         for vpn in self.config.sections():
@@ -136,7 +203,8 @@ class AdvancedVPNNexusManager:
             with open(config_path, 'a') as f:
                 f.write("\ntls-crypt ta.key")
         self.pfs_enabled = True
-        self.logger.info("Perfect Forward Secrecy enabled")
+        # self.logger.info("Perfect Forward Secrecy enabled")
+        logger.info("Perfect Forward Secrecy enabled")
 
     def monitor_traffic(self):
         net_io = psutil.net_io_counters()
@@ -185,7 +253,15 @@ class AdvancedVPNNexusManager:
         }
 
     def list_providers(self):
-        return list(self.config.sections())
+        providers = []
+        for section in self.config.sections():
+            provider = {
+                'name': section,
+                'config_path': self.config[section]['config_path']
+            }
+            providers.append(provider)
+            logger.info(f"Provider: {provider['name']}, Config Path: {provider['config_path']}")
+        return providers
 
     def add_provider(self, name: str, config_path: str):
         if name not in self.config:
@@ -208,5 +284,10 @@ class AdvancedVPNNexusManager:
             response = requests.get('https://api.ipify.org')
             return response.text
         except Exception as e:
-            self.logger.error(f"Failed to get current IP: {str(e)}")
+            # self.logger.error(f"Failed to get current IP: {str(e)}")
+            logger.error(f"Failed to get current IP: {str(e)}")
             return None
+
+    def __del__(self):
+        """Ensure VPN processes are cleaned up when the object is destroyed"""
+        self.cleanup_vpn_chain()

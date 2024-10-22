@@ -1,11 +1,7 @@
 <div class="card mb-3">
-    <div class="card-body">
-        <h5 class="card-title">{{ name }}</h5>
-        <button class="btn btn-danger btn-sm"
-                hx-delete="/vpn_providers/{{ name }}"
-                hx-target="closest div.card"
-                hx-swap="outerHTML">
-            Delete
-        </button>
-    </div>
+  <div class="card-body">
+    <h5 class="card-title">{{ provider.name }}</h5>
+    <p class="card-text">Config Path: {{ provider.config_path }}</p>
+    <button class="btn btn-danger" onclick="deleteProvider('{{ provider.name }}')">Delete</button>
+  </div>
 </div>
