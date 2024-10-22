@@ -4,8 +4,7 @@ import os.path
 import random
 import subprocess
 import time
-from tabnanny import check
-
+import re
 import dns.resolver
 import threading
 import requests
@@ -45,25 +44,6 @@ class AdvancedVPNNexusManager:
             config_file.write("\nncp-ciphers AES-256-GCM:AES-256-CBC")
         logger.info(f"Updated OpenVPN config: {config_path}")
 
-    # def setup_vpn_chain(self, num_hops=2):
-    #     available_vpns = self.config.sections()
-    #     if len(available_vpns) < num_hops:
-    #         # self.logger.error(f"Not enough VPN configs for {num_hops} hops")
-    #         logger.error(f"Not enough VPN configs for {num_hops} hops")
-    #         return False
-    #
-    #     self.vpn_chain = random.sample(available_vpns, num_hops)
-    #     for i, vpn in enumerate(self.vpn_chain):
-    #         config_path = self.config[vpn]['config_path']
-    #         if i==0:
-    #             subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
-    #         else:
-    #             time.sleep(10)
-    #             subprocess.run(["sudo", "openvpn", "--config", config_path, "--daemon"], check=True)
-    #
-    #     # self.logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
-    #     logger.info(f"VPN chain established: {' -> '.join(self.vpn_chain)}")
-    #     return True
     def setup_vpn_chain(self, num_hops=2):
         available_vpns = self.config.sections()
         if len(available_vpns) < num_hops:
@@ -95,7 +75,7 @@ class AdvancedVPNNexusManager:
                     "--config", config_path,
                     "--daemon",
                     f"--log", os.path.join(self.base_path, "logs", f"openvpn-{vpn}.log"),
-                        "--status", os.path.join(self.base_path, "logs", f"openvpn-status-{vpn}.log"), "1"
+                    "--status", os.path.join(self.base_path, "logs", f"openvpn-status-{vpn}.log"), "1"
                 ] + auth_cmd
 
                 logger.info(f"Starting OpenVPN with command: {cmd}")
@@ -198,13 +178,151 @@ class AdvancedVPNNexusManager:
             logger.error(f"Error checking DNS leaks: {str(e)}")
 
     def enable_pfs(self):
-        for vpn in self.config.sections():
-            config_path = self.config[vpn]['config_path']
-            with open(config_path, 'a') as f:
-                f.write("\ntls-crypt ta.key")
-        self.pfs_enabled = True
-        # self.logger.info("Perfect Forward Secrecy enabled")
-        logger.info("Perfect Forward Secrecy enabled")
+        """
+        Enable Perfect Forward Secrecy if not already enabled.
+        This involves:
+        1. Generating a static key if needed
+        2. Adding appropriate TLS configuration
+        3. Ensuring proper cipher suites
+        """
+        try:
+            for vpn in self.config.sections():
+                config_path = self.config[vpn]['config_path']
+                config_dir = os.path.dirname(config_path)
+
+                # Read current config
+                with open(config_path, 'r') as f:
+                    config_content = f.read()
+
+                # Skip if PFS is already enabled via embedded key
+                if '<tls-crypt>' in config_content or '<tls-auth>' in config_content:
+                    logger.info(f"PFS already enabled in {vpn} via embedded key")
+                    continue
+
+                # If no embedded key, need to set up PFS
+                ta_key_path = os.path.join(config_dir, f"{vpn}-ta.key")
+
+                # Generate static key if it doesn't exist
+                if not os.path.exists(ta_key_path):
+                    logger.info(f"Generating static key for {vpn}")
+                    try:
+                        subprocess.run(
+                            ["openvpn", "--genkey", "secret", ta_key_path],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                        os.chmod(ta_key_path, 0o600)    # Secure permissions
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Failed to generate static key for {vpn}: {str(e)}")
+                        return False
+
+                # Read current config lines
+                with open(config_path, 'r') as f:
+                    lines = f.readlines()
+
+                # Prepare PFS configuration
+                pfs_config = [
+                    "\n# Perfect Forward Secrecy Configuration\n",
+                    "tls-version-min 1.2\n",
+                    f"tls-crypt {ta_key_path}\n",
+                    "cipher AES-256-GCM\n",
+                    "auth SHA256\n",
+                    "key-direction 1\n",
+                    "tls-cipher TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384\n"
+                ]
+
+                # Check if these settings already exist
+                existing_settings = ''.join(lines)
+                new_settings = []
+                for setting in pfs_config:
+                    setting_name = setting.split()[0]
+                    if setting_name not in existing_settings:
+                        new_settings.append(setting)
+
+                # Backup original config
+                backup_path = f"{config_path}.backup"
+                if not os.path.exists(backup_path):
+                    with open(backup_path, 'w') as f:
+                        f.write(existing_settings)
+
+                # Add new PFS settings if needed
+                if new_settings:
+                    with open(config_path, 'a') as f:
+                        f.writelines(new_settings)
+                    logger.info(f"Added PFS configuration to {vpn}")
+
+                self.pfs_enabled = True
+                logger.info("Perfect Forward Secrecy enabled for all configurations")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to enable PFS: {str(e)}")
+            return False
+
+    def check_pfs_status(self):
+        """
+        Check PFS status for all VPN configurations
+        Returns detailed status including cipher suites and key configurations
+        """
+        try:
+            status = {}
+            for vpn in self.config.sections():
+                config_path = self.config[vpn]['config_path']
+                with open(config_path, 'r') as f:
+                    content = f.read()
+
+                # Check for various PFS indicators
+                status[vpn] = {
+                    'embedded_key': '<tls-crypt>' in content or '<tls-auth>' in content,
+                    'external_key': bool(re.search(r'tls-crypt\s+\S+\.key', content)),
+                    'tls_version': re.search(r'tls-version-min\s+([\d.]+)', content),
+                    'cipher': re.search(r'cipher\s+(\S+)', content),
+                    'tls_cipher': 'TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384' in content,
+                    'config_path': config_path,
+                    'pfs_enabled': any([
+                        '<tls-crypt>' in content,
+                        '<tls-auth>' in content,
+                        'tls-crypt' in content and '.key' in content
+                    ])
+                }
+
+                # Extract actual values where found
+                if status[vpn]['tls_version']:
+                    status[vpn]['tls_version'] = status[vpn]['tls_version'].group(1)
+
+                if status[vpn]['cipher']:
+                    status[vpn]['cipher'] = status[vpn]['cipher'].group(1)
+
+            return status
+        except Exception as e:
+            logger.error(f"Failed to check PFS status: {str(e)}")
+            return None
+
+    def disable_pfs(self):
+        """
+        Disable PFS by restoring original configurations
+        """
+        try:
+            for vpn in self.config.sections():
+                config_path = self.config[vpn]['config_path']
+                backup_path = f"{config_path}.backup"
+
+                if os.path.exists(backup_path):
+                    with open(backup_path, 'r') as f:
+                        original_config = f.read()
+
+                with open(config_path, 'w') as f:
+                    f.write(original_config)
+
+                logger.info(f"Restored original configuration for {vpn}")
+
+            self.pfs_enabled = False
+            logger.info("PFS disabled and original configurations restored")
+            return True
+        except Exception as e:
+            logger.error(f"Error disabling PFS: {str(e)}")
+            return False
+
 
     def monitor_traffic(self):
         net_io = psutil.net_io_counters()
