@@ -3,7 +3,9 @@
 *.pyc
 
 logs/
+
 config/test/
+config/.orig/
 
 
 project_tree.txt

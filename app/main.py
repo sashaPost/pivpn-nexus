@@ -2,15 +2,12 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-# from typing import List
 from .vpn_manager import AdvancedVPNNexusManager
 from .logging_utility import logger
 
 
 app = FastAPI(title="PiVPN Nexus")
-# vpn_manager = AdvancedVPNNexusManager('/etc/vpn_nexus_manager.conf')
 vpn_manager = AdvancedVPNNexusManager('config/vpn_nexus_manager.conf')
-
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -21,57 +18,52 @@ class VPNProvider(BaseModel):
 
 @app.get("/")
 async def home(request: Request):
-    status = vpn_manager.get_status()
-    return templates.TemplateResponse("index.html", {"request": request, "status": status})
+    """Home page with current IP display"""
+    try:
+        current_ip = vpn_manager.get_current_ip()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "current_ip": current_ip
+        })
+    except Exception as e:
+        logger.error(f"Error in home route: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.get("/vpn_providers")
-async def list_vpn_providers(request: Request):
-    providers = vpn_manager.list_providers()
-    logger.info(f"VPN providers: {providers}")
-    return templates.TemplateResponse("vpn_providers.html", {"request": request, "providers": providers})
+@app.post("/setup_chain")
+async def setup_chain(num_hops: int = 2):
+    """Set up VPN chain with specified number of hops"""
+    try:
+        success = vpn_manager.setup_vpn_chain(num_hops)
+        if success:
+            return {"status": "success", "message": f"VPN chain with {num_hops} hops established"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to set up VPN chain")
+    except Exception as e:
+        logger.error(f"Error setting up VPN chain: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to set up VPN chain")
 
 
-@app.post("/vpn_providers")
-async def add_vpn_provider(request: Request, name: str = Form(...), config_path: str = Form(...)):
-    success = vpn_manager.add_provider(name, config_path)
-    if success:
-        return templates.TemplateResponse("vpn_provider_added.html", {"request": request, "name": name})
-    else:
-        raise HTTPException(status_code=400, detail="Failed to add VPN provider")
-
-
-@app.delete("/vpn_providers/{provider_name}")
-async def delete_vpn_provider(provider_name: str):
-    success = vpn_manager.delete_provider(provider_name)
-    if success:
-        return True
-    else:
-        raise HTTPException(status_code=404, detail="VPN provider not found")
-
-
-@app.get("/optimize_vpn_chain")
-async def optimize_vpn_chain(request: Request):
-    vpn_manager.optimize_vpn_chain()
-    return templates.TemplateResponse("vpn_chain.html", {"request": request, "chain": vpn_manager.vpn_chain})
-
-
-@app.get("/traffic_stats")
-async def get_traffic_stats():
-    return vpn_manager.get_traffic_stats()
-
-
-@app.get("/dns_leak_status")
-async def get_dns_leak_status():
-    return {"dns_leak_status": vpn_manager.dns_leak_status}
-
-
-@app.post("/enable_pfs")
-async def enable_pfs():
-    vpn_manager.enable_pfs()
-    return {"message": "Perfect Forward Secrecy enabled"}
+@app.post("/cleanup_chain")
+async def cleanup_chain():
+    """Clean up all VPN connections and SOCKS proxies"""
+    try:
+        vpn_manager.cleanup_vpn_chain()
+        return {"status": "success", "message": "VPN chain cleaned up"}
+    except Exception as e:
+        logger.error(f"Error cleaning up VPN chain: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to clean up VPN chain")
 
 
 @app.get("/current_ip")
 async def get_current_ip():
-    return {"ip": vpn_manager.get_current_ip()}
+    """Get current public IP address through the VPN chain"""
+    try:
+        ip = vpn_manager.get_current_ip()
+        if ip:
+            return {"ip": ip}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to get current IP")
+    except Exception as e:
+        logger.error(f"Error getting current IP: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get current IP")
